@@ -15,7 +15,9 @@ import (
   "bytes"
   "strings"
   "os/exec"
+  "syscall"
   "github.com/lazywei/go-opencv/opencv"
+  "runtime"
 )
 
 type Image struct {
@@ -47,6 +49,7 @@ type Comp struct {
 }
 
 func main() {
+  runtime.GOMAXPROCS(4)
   fmt.Println("Start")
 
   // compile source into CString
@@ -61,8 +64,8 @@ func main() {
   defer C.free(unsafe.Pointer(src))
 
   imageICF := Image{Type: "ICF", Source: imageSrc, Color: "green"}
-  imageBBF := Image{Type: "BBF", Source: imageSrc, Color: "green"}
-  imageDPM := Image{Type: "DPM", Source: imageSrc, Color: "green"}
+  // imageBBF := Image{Type: "BBF", Source: imageSrc, Color: "green"}
+  // imageDPM := Image{Type: "DPM", Source: imageSrc, Color: "green"}
 
   // quickly draw opencv values...
   OpenCVClassifier("./haarcascade_frontalface_alt.xml", "OpenCV-frontal")
@@ -72,30 +75,30 @@ func main() {
   C.ccv_read_impl(unsafe.Pointer(src), &imageICF.image, C.CCV_IO_RGB_COLOR | C.CCV_IO_ANY_FILE, 0, 0, 0)
 
   // read for bbf
-  C.ccv_read_impl(unsafe.Pointer(src), &imageBBF.image, C.CCV_IO_GRAY | C.CCV_IO_ANY_FILE, 0, 0, 0)
+  // C.ccv_read_impl(unsafe.Pointer(src), &imageBBF.image, C.CCV_IO_GRAY | C.CCV_IO_ANY_FILE, 0, 0, 0)
 
   // for dpm
-  C.ccv_read_impl(unsafe.Pointer(src), &imageDPM.image, C.CCV_IO_ANY_FILE, 0, 0, 0)
+  // C.ccv_read_impl(unsafe.Pointer(src), &imageDPM.image, C.CCV_IO_ANY_FILE, 0, 0, 0)
 
-  g1 := imageICF.icf()
-  g2 := imageBBF.bbf()
-  g3 := imageDPM.dpm()
+  // g1 := imageICF.icf()
+  // g2 := imageBBF.bbf()
+  // g3 := imageDPM.dpm()
 
-  imageICF.Detections = <-g1
-  imageBBF.Detections = <-g2
-  imageDPM.Detections = <-g3
+  imageICF.Detections = imageICF.icf()
+  // imageBBF.Detections = imageBBF.bbf()
+  // imageDPM.Detections = <-g3
 
   if err := imageICF.drawBoxes(); err != nil {
     log.Fatal(err)
   }
 
-  if err := imageDPM.drawBoxes(); err != nil {
-    log.Fatal(err)
-  }
+  // if err := imageDPM.drawBoxes(); err != nil {
+  //   log.Fatal(err)
+  // }
 
-  if err := imageBBF.drawBoxes(); err != nil {
-    log.Fatal(err)
-  }
+  // if err := imageBBF.drawBoxes(); err != nil {
+  //   log.Fatal(err)
+  // }
 
   fmt.Println("Done!")
 }
@@ -120,7 +123,7 @@ func OpenCVClassifier(cascadePath string, imageType string) error {
   if ocvBuffer.String() != "" {
     log.Println("Running opencv")
     cmd := fmt.Sprintf("`convert %s -fill none -stroke %s -strokewidth 2 %s%s`", imageSrc, "yellow", ocvBuffer.String(), fileName(imageSrc, imageType))
-
+    log.Printf("%+v", cmd)
     if err := exec.Command("bash", "-c", cmd).Run(); err != nil {
       log.Println(err)
     }
@@ -170,92 +173,97 @@ func (image *Image) drawBoxes() error {
     buffer.WriteString(fmt.Sprintf("-draw \"rectangle %d,%d, %d,%d\" ", final_x, final_y, final_box_x, final_box_y))
   }
 
-  cmd := fmt.Sprintf("`convert %s -fill none -stroke %s -strokewidth 2 %s%s`", image.Source, image.Color, buffer.String(), image.fileName())
-
-  if err := exec.Command("bash", "-c", cmd).Run(); err != nil {
-    log.Println(err)
+  binary, err := exec.LookPath("convert")
+  if err != nil {
     return err
   }
+
+  env := os.Environ()
+
+  args := []string{"convert", image.Source, "-fill none", fmt.Sprintf("-stroke %s", image.Color), "-strokewidth 2", fmt.Sprintf("%s%s", buffer.String(), image.fileName())}
+  execErr := syscall.Exec(binary, args, env)
+  if execErr != nil {
+    log.Printf("%+v", execErr)
+  }
+
+  // cmd := fmt.Sprintf("`convert %s -fill none -stroke %s -strokewidth 2 %s%s`", image.Source, image.Color, buffer.String(), image.fileName())
+
+  // if err := exec.Command("bash", "-c", cmd).Run(); err != nil {
+  //   log.Println(err)
+  //   return err
+  // }
 
   return nil
 }
 
-func (image *Image) dpm() <- chan []C.ccv_comp_t {
-  c := make(chan []C.ccv_comp_t)
+// func (image *Image) dpm() <- chan []C.ccv_comp_t {
+//   c := make(chan []C.ccv_comp_t)
 
-  go func() {
-    cascadeSrc, _ := filepath.Abs(os.Args[4])
-    cascade := new(DPMMixture)
-    cascadeName := C.CString(cascadeSrc)
-    defer C.free(unsafe.Pointer(cascadeName))
+//   go func() {
+//     cascadeSrc, _ := filepath.Abs(os.Args[4])
+//     cascade := new(DPMMixture)
+//     cascadeName := C.CString(cascadeSrc)
+//     defer C.free(unsafe.Pointer(cascadeName))
 
-    cascade.mixture = C.ccv_dpm_read_mixture_model(cascadeName)
-    defer C.free(unsafe.Pointer(cascade.mixture))
+//     cascade.mixture = C.ccv_dpm_read_mixture_model(cascadeName)
+//     defer C.free(unsafe.Pointer(cascade.mixture))
 
-    faces := new(CCVArray)
-    faces.array = C.ccv_dpm_detect_objects(image.image, &cascade.mixture, 1, C.ccv_dpm_default_params)
-    if faces.array == nil {
-      c <- make([]C.ccv_comp_t, 0)
-    } else {
-      defer C.free(unsafe.Pointer(faces.array))
-      slice := (*[1 << 30]C.ccv_comp_t)(unsafe.Pointer(faces.array.data))[:faces.array.rnum:faces.array.rnum]
-      c <- slice
-    }
-  }()
+//     faces := new(CCVArray)
+//     faces.array = C.ccv_dpm_detect_objects(image.image, &cascade.mixture, 1, C.ccv_dpm_default_params)
+//     if faces.array == nil {
+//       c <- make([]C.ccv_comp_t, 0)
+//     } else {
+//       defer C.free(unsafe.Pointer(faces.array))
+//       slice := (*[1 << 30]C.ccv_comp_t)(unsafe.Pointer(faces.array.data))[:faces.array.rnum:faces.array.rnum]
+//       c <- slice
+//     }
+//   }()
 
-  return c
-}
+//   return c
+// }
 
-func (image *Image) bbf() <- chan []C.ccv_comp_t {
-  c := make(chan []C.ccv_comp_t)
+func (image *Image) bbf() []C.ccv_comp_t {
+  var c []C.ccv_comp_t
 
-  go func() {
-    cascadeSrc, _ := filepath.Abs(os.Args[3])
+  cascadeSrc, _ := filepath.Abs(os.Args[3])
 
-    cascade := new(ClassifierBBF)
-    cascadeName := C.CString(cascadeSrc)
-    defer C.free(unsafe.Pointer(cascadeName))
-    cascade.classifier = C.ccv_bbf_read_classifier_cascade(cascadeName)
-    defer C.free(unsafe.Pointer(cascade.classifier))
+  cascade := new(ClassifierBBF)
+  cascadeName := C.CString(cascadeSrc)
+  defer C.free(unsafe.Pointer(cascadeName))
+  cascade.classifier = C.ccv_bbf_read_classifier_cascade(cascadeName)
+  defer C.free(unsafe.Pointer(cascade.classifier))
 
-    faces := new(CCVArray)
-    faces.array = C.ccv_bbf_detect_objects(image.image, &cascade.classifier, 1, C.ccv_bbf_default_params)
-    if faces.array == nil {
-      c <- make([]C.ccv_comp_t, 0)
-    } else {
-      defer C.free(unsafe.Pointer(faces.array))
-      slice := (*[1 << 30]C.ccv_comp_t)(unsafe.Pointer(faces.array.data))[:faces.array.rnum:faces.array.rnum]
-      c <- slice
-    }
-  }()
+  faces := new(CCVArray)
+  faces.array = C.ccv_bbf_detect_objects(image.image, &cascade.classifier, 1, C.ccv_bbf_default_params)
+  if faces.array != nil {
+    defer C.free(unsafe.Pointer(faces.array))
+    slice := (*[1 << 30]C.ccv_comp_t)(unsafe.Pointer(faces.array.data))[:faces.array.rnum:faces.array.rnum]
+    return slice
+  }
 
   return c
 }
 
-func (image *Image) icf() <- chan []C.ccv_comp_t {
-  c := make(chan []C.ccv_comp_t)
+func (image *Image) icf() []C.ccv_comp_t {
+  var c []C.ccv_comp_t
 
-  go func() {
-    cascadeSrc, _ := filepath.Abs(os.Args[2])
+  cascadeSrc, _ := filepath.Abs(os.Args[2])
 
-    cascade := new(ClassifierICF)
-    cascadeName := C.CString(cascadeSrc)
-    defer C.free(unsafe.Pointer(cascadeName))
-    cascade.classifier = C.ccv_icf_read_classifier_cascade(cascadeName)
-    defer C.free(unsafe.Pointer(cascade.classifier))
+  cascade := new(ClassifierICF)
+  cascadeName := C.CString(cascadeSrc)
+  defer C.free(unsafe.Pointer(cascadeName))
+  cascade.classifier = C.ccv_icf_read_classifier_cascade(cascadeName)
+  defer C.free(unsafe.Pointer(cascade.classifier))
 
-    // fmt.Println("doe")
+  // fmt.Println("doe")
 
-    faces := new(CCVArray)
-    faces.array = C.ccv_icf_detect_objects(image.image, unsafe.Pointer(&cascade.classifier), 1, C.ccv_icf_default_params)
-    if faces.array == nil {
-      c <- make([]C.ccv_comp_t, 0)
-    } else {
-      defer C.free(unsafe.Pointer(faces.array))
-      slice := (*[1 << 30]C.ccv_comp_t)(unsafe.Pointer(faces.array.data))[:faces.array.rnum:faces.array.rnum]
-      c <- slice
-    }
-  }()
+  faces := new(CCVArray)
+  faces.array = C.ccv_icf_detect_objects(image.image, unsafe.Pointer(&cascade.classifier), 1, C.ccv_icf_default_params)
+  if faces.array != nil {
+    defer C.free(unsafe.Pointer(faces.array))
+    slice := (*[1 << 30]C.ccv_comp_t)(unsafe.Pointer(faces.array.data))[:faces.array.rnum:faces.array.rnum]
+    return slice
+  }
 
   return c
 }
