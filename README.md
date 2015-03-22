@@ -6,12 +6,13 @@ Detect faces in images using a library called [CCV](https://github.com/liuliu/cc
 
 This code is **most definitely not production ready by any stretch of the imagination.** This code was simply a quick exercise to learn Go and how to bind a C library in two days. Was fun, lots of trial and error.. especially on a mac osx. I really have no idea how to reinstall this... on that note -- when you run it -- you may get a syscall error but the program itself actually worked (used to not be the case, and not worth the effort in repairing since this was educational only).
 
-Don't think it works? The results returned from the **test commands** are in the `results` folder.
+Don't think it works? I don't blame you, the results returned from the **test commands** are in the `results` folder.
 
 ## Requirements
 
 * [fftw](https://github.com/FFTW/fftw3)
 * [ccv](https://github.com/liuliu/ccv)
+* `go get github.com/lazywei/go-opencv/opencv`
 
 ## Test commands
 
